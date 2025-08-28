@@ -1,9 +1,11 @@
 from azure.eventhub import EventHubConsumerClient
 from azure.storage.filedatalake import DataLakeServiceClient
-import json
+import json, threading
 from datetime import datetime
 from azure.core.exceptions import ResourceNotFoundError
 
+import signal
+import sys
 
 
 with open("config.json","r") as f:
@@ -22,20 +24,23 @@ service_client =  DataLakeServiceClient(
     account_url=f"https://{storage_account}.dfs.core.windows.net",
     credential=storage_account_key
 )
-container = "data"
+container = config["ADLSContainer"]
 
 def save_to_adls(data, file_name):
     file_client = service_client.get_file_client(container, file_name)
+    print(f"save_to_adls: {file_name}")
     try:    # check if file already exist
         properties = file_client.get_file_properties()     
         current_size = properties.size   
     except ResourceNotFoundError:    # create if file doesn't exist
         file_client.create_file()
+        print(f"{file_name} is created successfully!!")
         current_size=0
 
     encoded_data = data.encode('utf-8')
     file_client.append_data(encoded_data,offset=current_size)     # append the current data in the end of file
     file_client.flush_data(current_size+len(encoded_data))       # flush buffered data to the file in ADLS
+    print(f"Data was appended on file ..")
     
 
 def on_event(partition_context, event):
@@ -43,19 +48,38 @@ def on_event(partition_context, event):
     #print(message)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     date = datetime.now().strftime("%Y%m%d")
-    file_name = f"News_API/Bronze_NewsData/{date}/News_{timestamp}.json"   # Directory+file_name
+    file_name = f"Bronze_NewsData/{date}/News_{timestamp}.json"   # Directory+file_name
     save_to_adls(message+"\n", file_name)
-    #print(f"{file_name} is created successfully!!")
     partition_context.update_checkpoint(event)  # mark as read
 
-client = EventHubConsumerClient.from_connection_string(
+#---------------------------------------------------------
+
+running = True
+
+def shutdown_handler(sig, frame):
+    global running
+    print("Shutdown signal received")
+    running = False
+signal.signal(signal.SIGINT, shutdown_handler)   # KeyboardInterrupt (Ctrl+C)
+signal.signal(signal.SIGTERM, shutdown_handler)  # `kill` or container stop
+
+def receive_events():
+    with client:
+        client.receive(on_event=on_event, starting_position="@latest")
+
+
+if __name__== "__main__":
+    client = EventHubConsumerClient.from_connection_string(
     conn_str=EVENT_HUB_CONN,
     consumer_group=CONSUMER_GROUP,
     eventhub_name=f"{EVENT_HUB_NAME}"
-)
+    )
+    thread = threading.Thread(target=receive_events, daemon=True)
+    thread.start()
+    while running:
+        pass
 
-with client:
-    client.receive(
-        on_event=on_event,
-       starting_position= "-1"
-            )
+    print("Closing client...")
+    client.close()
+    thread.join()
+    print("Consumer stopped.")

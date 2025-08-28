@@ -1,4 +1,4 @@
-import requests
+import requests, time
 import json
 from azure.eventhub import EventHubProducerClient, EventData
 
@@ -14,11 +14,16 @@ Shared_access_key = config["Event_hub_shared_access_key"]
 EVENT_HUB_CONN = f"Endpoint=sb://{EVENT_HUB_NAMESPACE}.servicebus.windows.net/;SharedAccessKeyName={SharedAccessPolicyName};SharedAccessKey={Shared_access_key};EntityPath={EVENT_HUB_NAME}"
 
 def fetch_news():
-    response = requests.get(News_API_URL)
-    if response.status_code==200:
-        return response.json().get("articles",[])
-    else:
-        return response.json("message",[])
+    try:
+        response = requests.get(News_API_URL)
+        if response.status_code==200:
+            return response.json().get("articles",[]), response.status_code
+        else:
+            return response.json("message",[]), response.status_code
+    except:
+        print("Unable to fetch the records...waiting for a min...")
+        time.sleep(60)
+        return "API call failed" , 999
 def send_to_eventhub(news_articles):
     producer = EventHubProducerClient.from_connection_string(
         conn_str=EVENT_HUB_CONN,
@@ -28,8 +33,8 @@ def send_to_eventhub(news_articles):
     #create batch
     event_data_batch = producer.create_batch()
     for article in news_articles:
+        event = json.dumps(article)  # convert each article to json string
         try:
-            event = json.dumps(article)    # convert each article to json string
             event_data_batch.add(EventData(event))
         except ValueError:
             producer.send_batch(event_data_batch)    
@@ -45,5 +50,13 @@ def send_to_eventhub(news_articles):
     print(f"Sent {len(news_articles)} articles to Event Hub")
 
 if __name__ == "__main__":
-    articles = fetch_news()
-    send_to_eventhub(articles)
+    while True:
+        articles = fetch_news()
+        if articles[1] !=200:
+            print(articles)
+        else:
+            send_to_eventhub(articles[0])
+        time.sleep(config["producer_sleep"])
+
+
+    
