@@ -1,14 +1,16 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from datetime import datetime, timedelta
+import json
 
 spark = SparkSession.builder.appName("ADLS_Check_Local")\
     .config("spark.jars.packages", "com.azure:azure-storage-file-datalake:12.19.0,org.apache.hadoop:hadoop-azure:3.3.4")\
     .getOrCreate()
-
-storage_account = "data06"
-container = "data"
-account_key = "vQkBtEnEZEibHMT/Z1Wk/KgexMGbaUyIRlYO2gxW+bSFNnL1QsNFOh/BFG2AQJyLYimcZJouMm1I+AStn1th8Q=="
+with open("config.json","r") as f:
+    config = json.load(f)
+storage_account = config["StorageAccount"]
+container = config["ADLSContainer"]
+account_key = config["StorageAccountKey"]
 
 
 # Configure Spark to access your container
@@ -22,9 +24,12 @@ spark.conf.set(
 )
 yesterday = datetime.now() - timedelta(days=1)
 yesterday = yesterday.strftime("%Y%m%d")   # to fetch all files from yesterday
+source_directory = config["sourceDirectory"]
+target_directory = config["targetDirectory"]
 
 # Path to the folder
-source_path = f"wasbs://{container}@{storage_account}.blob.core.windows.net/News_API/Bronze_NewsData/{yesterday}/"
+source_path = f"wasbs://{container}@{storage_account}.blob.core.windows.net/{source_directory}/{yesterday}/"
+
 
 # Read all JSON files in that folder
 try:
@@ -45,10 +50,13 @@ print("Modifications have been performed!")
 
 
 #file_name = datetime.now().strftime("%Y_%m_%d")
-output_path =       f"abfss://{container}@{storage_account}.dfs.core.windows.net/News_API/Silver_NewsData1/{yesterday}/"
-output_path_wasbs = f"wasbs://{container}@{storage_account}.blob.core.windows.net/News_API/Silver_NewsData/{yesterday}/"
+output_path =       f"abfss://{container}@{storage_account}.dfs.core.windows.net/{target_directory}/{yesterday}/"
+output_path_wasbs = f"wasbs://{container}@{storage_account}.blob.core.windows.net/{target_directory}/{yesterday}/"
+
+spark.conf.set("spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version", "2")  
+#On an HNS-enabled account, Spark hits DirectoryIsNotEmpty if any temporary files or previous files exist.
 
 
 #df.write.mode("overwrite").parquet(output_path )  
-df.write.mode("overwrite").parquet(output_path_wasbs)  
+df.write.mode("overwrite").parquet(output_path)  
 print("File have been saved in Silver layer!!")
