@@ -4,7 +4,7 @@ import json, threading
 from datetime import datetime
 from azure.core.exceptions import ResourceNotFoundError
 
-import signal
+import signal, time
 import sys
 
 
@@ -43,7 +43,7 @@ def save_to_adls(data, file_name):
     print(f"Data was appended on file ..")
     
 
-def on_event(partition_context, event):
+def on_eventNews(partition_context, event):
     message = json.dumps(event.body_as_json())
     #print(message)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
@@ -63,9 +63,14 @@ def shutdown_handler(sig, frame):
 signal.signal(signal.SIGINT, shutdown_handler)   # KeyboardInterrupt (Ctrl+C)
 signal.signal(signal.SIGTERM, shutdown_handler)  # `kill` or container stop
 
-def receive_events():
-    with client:
-        client.receive(on_event=on_event, starting_position="@latest")
+def receive_events(client):
+    while running:
+        with client:
+            # receive blocks, so add a timeout or a try/except to check the flag
+            client.receive(on_event=on_eventNews, starting_position="@latest")
+        # optional: small sleep to prevent busy looping
+        time.sleep(0.1)
+
 
 
 if __name__== "__main__":
@@ -74,12 +79,21 @@ if __name__== "__main__":
     consumer_group=CONSUMER_GROUP,
     eventhub_name=f"{EVENT_HUB_NAME}"
     )
-    thread = threading.Thread(target=receive_events, daemon=True)
+    thread = threading.Thread(target=receive_events, args=(client,), daemon=True)
     thread.start()
-    while running:
-        pass
 
-    print("Closing client...")
-    client.close()
-    thread.join()
-    print("Consumer stopped.")
+    try:
+        while running:
+            # main thread can do something else
+            time.sleep(1)
+            # simulate stop condition
+            # running = False  # uncomment to stop
+    finally:
+        running = False
+        print("Closing client...")
+        client.close()
+        thread.join()
+        print("Consumer stopped.")
+    
+
+    
